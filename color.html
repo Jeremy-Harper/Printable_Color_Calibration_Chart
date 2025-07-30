@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Iterative Color Printing & Analysis Workflow</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for print media to enforce physical sizing */
+        @media print {
+            @page {
+                /* Standard US Letter paper */
+                size: 8.5in 11in;
+                margin: 0.5in;
+            }
+            /* FIX: Force a white background for printing and hide the main app */
+            body, html {
+                visibility: hidden; /* Hide everything by default */
+                background: #FFFFFF !important; /* Force a white background */
+            }
+            /* Make only the print area and its contents visible */
+            #print-area, #print-area * {
+                visibility: visible;
+            }
+            #print-area {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+                height: 100%;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200 font-sans">
+    <div id="root"></div>
+    <div id="print-area"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        //-- Data: Color Version 1 24 Patches --//
+        const classic24Colors = [
+            { name: 'Dark skin', rgb: { r: 115, g: 82, b: 68 } }, { name: 'Light skin', rgb: { r: 197, g: 147, b: 127 } }, { name: 'Blue sky', rgb: { r: 98, g: 122, b: 157 } }, { name: 'Foliage', rgb: { r: 87, g: 108, b: 67 } }, { name: 'Blue flower', rgb: { r: 133, g: 128, b: 177 } }, { name: 'Bluish green', rgb: { r: 103, g: 189, b: 170 } },
+            { name: 'Orange', rgb: { r: 214, g: 126, b: 44 } }, { name: 'Purplish blue', rgb: { r: 80, g: 91, b: 166 } }, { name: 'Moderate red', rgb: { r: 193, g: 80, b: 99 } }, { name: 'Purple', rgb: { r: 94, g: 60, b: 108 } }, { name: 'Yellow green', rgb: { r: 157, g: 188, b: 64 } }, { name: 'Orange yellow', rgb: { r: 224, g: 163, b: 46 } },
+            { name: 'Blue', rgb: { r: 56, g: 61, b: 150 } }, { name: 'Green', rgb: { r: 70, g: 148, b: 73 } }, { name: 'Red', rgb: { r: 175, g: 54, b: 60 } }, { name: 'Yellow', rgb: { r: 231, g: 199, b: 31 } }, { name: 'Magenta', rgb: { r: 187, g: 86, b: 149 } }, { name: 'Cyan', rgb: { r: 8, g: 133, b: 161 } },
+            { name: 'White 9.5', rgb: { r: 243, g: 243, b: 242 } }, { name: 'Neutral 8', rgb: { r: 200, g: 200, b: 200 } }, { name: 'Neutral 6.5', rgb: { r: 160, g: 160, b: 160 } }, { name: 'Neutral 5', rgb: { r: 122, g: 122, b: 121 } }, { name: 'Neutral 3.5', rgb: { r: 85, g: 85, b: 85 } }, { name: 'Black 2', rgb: { r: 52, g: 52, b: 52 } },
+        ];
+
+        //-- Data: Color Version 2 Enhancement & Grayscale Patches --//
+        const passportEnhancementColors = {
+            warming: [{r:234,g:175,b:42}, {r:237,g:194,b:104}, {r:190,g:145,b:35}, {r:205,g:168,b:96}],
+            cooling: [{r:72,g:155,b:200}, {r:120,g:182,b:214}, {r:50,g:112,b:156}, {r:92,g:145,b:180}],
+            clipping: [
+                {r:0,g:0,b:0}, {r:17,g:17,b:17}, {r:34,g:34,b:34}, {r:51,g:51,b:51}, // Darks
+                {r:255,g:255,b:255}, {r:238,g:238,b:238}, {r:221,g:221,b:221}, {r:204,g:204,b:204} // Lights
+            ],
+            whiteBalance: { r: 220, g: 220, b: 220 }
+        };
+        
+        //-- Main Application Component --//
+        function App() {
+            // State management
+            const [targetType, setTargetType] = useState('Classic');
+            const [displayedColors, setDisplayedColors] = useState(classic24Colors);
+            const [analysisResults, setAnalysisResults] = useState([]);
+            const [uploadedFiles, setUploadedFiles] = useState([]);
+            const [isLoading, setIsLoading] = useState(false);
+            const [error, setError] = useState('');
+            const canvasRef = useRef(null);
+
+            const GRID_ROWS = 4;
+            const GRID_COLS = 6;
+            const TOTAL_PATCHES = GRID_ROWS * GRID_COLS;
+            const DPI = 1200;
+            const MM_PER_INCH = 25.4;
+
+            //-- Canvas Drawing Effect --//
+            useEffect(() => {
+                const drawCanvas = () => {
+                    const canvas = canvasRef.current;
+                    if (!canvas) return;
+                    const ctx = canvas.getContext('2d');
+                    if (targetType === 'Classic') {
+                        drawClassicChart(ctx, canvas);
+                    } else if (targetType === 'Passport') {
+                        drawPassportChart(ctx, canvas);
+                    }
+                };
+                drawCanvas();
+            }, [targetType, displayedColors]);
+            
+            //-- Chart Drawing Functions --//
+            const getCanvasSizeForPrint = (widthMM, heightMM) => ({
+                width: Math.round((widthMM / MM_PER_INCH) * DPI),
+                height: Math.round((heightMM / MM_PER_INCH) * DPI)
+            });
+
+            const drawRuler = (ctx, startX, startY, lengthMM, pixelsPerMM, majorTick, tickHeight, labelY) => {
+                 ctx.strokeStyle = '#FFFFFF';
+                 ctx.fillStyle = '#FFFFFF';
+                 ctx.lineWidth = Math.max(1, DPI / 600);
+                 ctx.font = `bold ${DPI * 0.02}px 'Helvetica', sans-serif`;
+                 ctx.textAlign = 'center';
+                 for (let mm = 0; mm <= lengthMM; mm++) {
+                     const x = startX - (mm * pixelsPerMM);
+                     const isMajor = mm % majorTick === 0;
+                     const currentTickHeight = isMajor ? tickHeight : tickHeight * 0.6;
+                     ctx.beginPath();
+                     ctx.moveTo(x, startY);
+                     ctx.lineTo(x, startY - currentTickHeight);
+                     ctx.stroke();
+                     if (isMajor) {
+                         ctx.fillText(mm, x, labelY);
+                     }
+                 }
+            };
+
+            const drawClassicChart = (ctx, canvas) => {
+                const physicalWidthMM = 285;
+                const physicalHeightMM = 203;
+                const { width, height } = getCanvasSizeForPrint(physicalWidthMM, physicalHeightMM);
+                canvas.width = width;
+                canvas.height = height;
+                ctx.fillStyle = '#1c1c1c';
+                ctx.fillRect(0, 0, width, height);
+
+                const marginX = width * 0.05;
+                const marginY = height * 0.08;
+                const chartWidth = width - 2 * marginX;
+                const chartHeight = height - 2 * marginY;
+                const cellWidth = chartWidth / GRID_COLS;
+                const cellHeight = chartHeight / GRID_ROWS;
+                const gap = cellWidth * 0.04;
+
+                displayedColors.forEach((color, index) => {
+                    const row = Math.floor(index / GRID_COLS);
+                    const col = index % GRID_COLS;
+                    const cellX = marginX + col * cellWidth;
+                    const cellY = marginY + row * cellHeight;
+                    ctx.fillStyle = `rgb(${color.rgb.r}, ${color.rgb.g}, ${color.rgb.b})`;
+                    ctx.fillRect(cellX + gap / 2, cellY + gap / 2, cellWidth - gap, cellHeight - gap);
+                });
+                
+                ctx.fillStyle = '#FFFFFF';
+                ctx.font = `bold ${height * 0.04}px 'Helvetica', sans-serif`;
+                ctx.textAlign = 'left';
+                ctx.fillText('Color Version 1', marginX, marginY * 0.7);
+                
+                const markerSize = marginX * 0.2;
+                ctx.strokeStyle = '#FFFFFF';
+                ctx.lineWidth = Math.max(2, DPI / 300);
+                const markerPos = {
+                    tl: {x: marginX*0.5, y: marginY*0.4}, tr: {x: width - marginX*0.5 - markerSize, y: marginY*0.4},
+                    bl: {x: marginX*0.5, y: height - marginY*0.6}, br: {x: width - marginX*0.5 - markerSize, y: height - marginY*0.6},
+                }
+                ctx.strokeRect(markerPos.tl.x, markerPos.tl.y, markerSize, markerSize);
+                ctx.strokeRect(markerPos.tr.x, markerPos.tr.y, markerSize, markerSize);
+                ctx.strokeRect(markerPos.bl.x, markerPos.bl.y, markerSize, markerSize);
+                ctx.strokeRect(markerPos.br.x, markerPos.br.y, markerSize, markerSize);
+
+                const pixelsPerMM = DPI / MM_PER_INCH;
+                const rulerLengthMM = 100;
+                const rulerStartX = markerPos.br.x;
+                const rulerY = markerPos.br.y + markerSize * 2;
+                drawRuler(ctx, rulerStartX, rulerY, rulerLengthMM, pixelsPerMM, 10, markerSize, rulerY + markerSize * 1.5);
+            };
+            
+            const drawPassportChart = (ctx, canvas) => {
+                const physicalWidthMM = 125;
+                const physicalHeightMM = 90;
+                const { width, height } = getCanvasSizeForPrint(physicalWidthMM * 2, physicalHeightMM);
+                canvas.width = width;
+                canvas.height = height;
+                const halfWidth = width / 2;
+
+                ctx.fillStyle = '#1c1c1c';
+                ctx.fillRect(0, 0, width, height);
+                ctx.fillStyle = '#000000';
+                ctx.fillRect(halfWidth - (DPI/600), 0, (DPI/300), height);
+
+                const p_marginX = halfWidth * 0.1;
+                const p_marginY = height * 0.1;
+
+                // LEFT PAGE
+                const leftContentWidth = halfWidth - 2 * p_marginX;
+                const leftContentHeight = height - 2 * p_marginY;
+                const wbHeight = leftContentHeight * 0.6;
+                ctx.fillStyle = `rgb(${passportEnhancementColors.whiteBalance.r}, ${passportEnhancementColors.whiteBalance.g}, ${passportEnhancementColors.whiteBalance.b})`;
+                ctx.fillRect(p_marginX, p_marginY, leftContentWidth, wbHeight);
+
+                const enhancementY = p_marginY + wbHeight + (leftContentHeight * 0.05);
+                const enhancementHeight = (leftContentHeight - wbHeight - (leftContentHeight * 0.05)) / 2;
+                const enhPatchWidth = leftContentWidth / 8;
+                
+                const allEnhPatches = [...passportEnhancementColors.clipping.slice(0,4), ...passportEnhancementColors.clipping.slice(4)];
+                allEnhPatches.forEach((c, i) => {
+                    const x = p_marginX + i * enhPatchWidth;
+                    ctx.fillStyle = `rgb(${c.r}, ${c.g}, ${c.b})`;
+                    ctx.fillRect(x, enhancementY, enhPatchWidth, enhancementHeight);
+                });
+                const allCreativePatches = [...passportEnhancementColors.warming, ...passportEnhancementColors.cooling];
+                allCreativePatches.forEach((c, i) => {
+                    const x = p_marginX + i * enhPatchWidth;
+                    ctx.fillStyle = `rgb(${c.r}, ${c.g}, ${c.b})`;
+                    ctx.fillRect(x, enhancementY + enhancementHeight, enhPatchWidth, enhancementHeight);
+                });
+
+                // RIGHT PAGE
+                const r_marginX = halfWidth + p_marginX;
+                const classicWidth = halfWidth - 2 * p_marginX;
+                const classicHeight = height - 2 * p_marginY;
+                const cellWidth = classicWidth / GRID_COLS;
+                const cellHeight = classicHeight / GRID_ROWS;
+                const gap = cellWidth * 0.05;
+
+                displayedColors.forEach((color, index) => {
+                    const row = Math.floor(index / GRID_COLS);
+                    const col = index % GRID_COLS;
+                    const cellX = r_marginX + col * cellWidth;
+                    const cellY = p_marginY + row * cellHeight;
+                    ctx.fillStyle = `rgb(${color.rgb.r}, ${color.rgb.g}, ${color.rgb.b})`;
+                    ctx.fillRect(cellX + gap / 2, cellY + gap / 2, cellWidth - gap, cellHeight - gap);
+                });
+
+                const pixelsPerMM = DPI / MM_PER_INCH;
+                const rulerLengthMM = 40;
+                const rulerStartX = width - p_marginX;
+                const rulerY = height - p_marginY * 0.5;
+                const tickHeight = p_marginY * 0.2;
+                drawRuler(ctx, rulerStartX, rulerY, rulerLengthMM, pixelsPerMM, 10, tickHeight, rulerY - tickHeight - 5);
+            };
+
+            const handleSaveChart = () => {
+                const canvas = canvasRef.current;
+                const link = document.createElement('a');
+                link.download = `${targetType}_Chart_${DPI}DPI.png`;
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+            };
+
+            const handlePrintChart = () => {
+                const canvas = canvasRef.current;
+                const dataUrl = canvas.toDataURL('image/png');
+                const printArea = document.getElementById('print-area');
+                let printWidth, printHeight;
+                if (targetType === 'Classic') {
+                    printWidth = '285mm'; printHeight = '203mm';
+                } else {
+                    printWidth = `${125*2}mm`; printHeight = '90mm';
+                }
+                printArea.innerHTML = `<img src="${dataUrl}" style="width: ${printWidth}; height: ${printHeight};" />`;
+                // Defer print call to ensure image has loaded into the DOM
+                setTimeout(() => window.print(), 100);
+            };
+            
+            const handleTargetChange = (newType) => {
+                setTargetType(newType);
+                setDisplayedColors(classic24Colors);
+                setAnalysisResults([]);
+                setUploadedFiles([]);
+                setError('');
+            };
+            
+            const handleFileChange = (event) => {
+                if (event.target.files.length > 0) {
+                    setUploadedFiles(Array.from(event.target.files));
+                    setAnalysisResults([]);
+                    setError('');
+                }
+            };
+            
+            const handleAnalyze = async () => {
+                if (uploadedFiles.length === 0) {
+                    setError('Please upload at least one image of the printed chart first.'); return;
+                }
+                setIsLoading(true); setError('');
+                try {
+                    const capturedColorsByPatch = Array.from({ length: TOTAL_PATCHES }, () => []);
+                    for (const file of uploadedFiles) {
+                        const image = await loadImage(file);
+                        const imagePatches = extractPatchColors(image);
+                        imagePatches.forEach((color, index) => { capturedColorsByPatch[index].push(color); });
+                    }
+                    const finalCapturedColors = capturedColorsByPatch.map(patchSamples => {
+                        if (patchSamples.length === 0) return { r: 0, g: 0, b: 0 };
+                        const total = patchSamples.reduce((acc, color) => ({ r: acc.r + color.r, g: acc.g + color.g, b: acc.b + color.b, }), { r: 0, g: 0, b: 0 });
+                        return { r: Math.round(total.r / patchSamples.length), g: Math.round(total.g / patchSamples.length), b: Math.round(total.b / patchSamples.length), };
+                    });
+                    const results = classic24Colors.map((original, index) => ({ ...original, capturedRgb: finalCapturedColors[index], }));
+                    setAnalysisResults(results);
+                } catch (e) {
+                    console.error('Analysis failed:', e);
+                    setError('Analysis failed. Please ensure uploaded images are clear, well-lit, and show the entire 24-patch grid.');
+                } finally { setIsLoading(false); }
+            };
+
+            const loadImage = (file) => new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = reject;
+                img.src = URL.createObjectURL(file);
+            });
+
+            const extractPatchColors = (image) => {
+                const offscreenCanvas = document.createElement('canvas');
+                offscreenCanvas.width = image.width; offscreenCanvas.height = image.height;
+                const ctx = offscreenCanvas.getContext('2d');
+                ctx.drawImage(image, 0, 0);
+                const patchWidth = image.width / GRID_COLS; const patchHeight = image.height / GRID_ROWS;
+                const extractedColors = [];
+                for (let row = 0; row < GRID_ROWS; row++) {
+                    for (let col = 0; col < GRID_COLS; col++) {
+                        const sampleX = col * patchWidth + patchWidth * 0.25;
+                        const sampleY = row * patchHeight + patchHeight * 0.25;
+                        const sampleW = patchWidth * 0.5; const sampleH = patchHeight * 0.5;
+                        const imageData = ctx.getImageData(sampleX, sampleY, sampleW, sampleH);
+                        const data = imageData.data; let r = 0, g = 0, b = 0;
+                        for (let i = 0; i < data.length; i += 4) { r += data[i]; g += data[i + 1]; b += data[i + 2]; }
+                        const pixelCount = data.length / 4;
+                        extractedColors.push({ r: Math.round(r / pixelCount), g: Math.round(g / pixelCount), b: Math.round(b / pixelCount), });
+                    }
+                }
+                return extractedColors;
+            };
+            
+            const handleGenerateAdjustedChart = () => {
+                if (analysisResults.length === 0) {
+                    setError('Please analyze a printed chart before generating an adjustment.'); return;
+                }
+                const newAdjustedColors = analysisResults.map(result => {
+                    const I = result.rgb; const C = result.capturedRgb;
+                    const adjustedR = C.r > 0 ? Math.min(255, (I.r * I.r) / C.r) : (I.r > 0 ? 255 : 0);
+                    const adjustedG = C.g > 0 ? Math.min(255, (I.g * I.g) / C.g) : (I.g > 0 ? 255 : 0);
+                    const adjustedB = C.b > 0 ? Math.min(255, (I.b * I.b) / C.b) : (I.b > 0 ? 255 : 0);
+                    return { name: `Adjusted ${result.name}`, rgb: { r: Math.round(adjustedR), g: Math.round(adjustedG), b: Math.round(adjustedB), } };
+                });
+                setDisplayedColors(newAdjustedColors);
+                setError('');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            };
+
+            const getColorDifference = (rgb1, rgb2) => {
+                if (!rgb1 || !rgb2) return 0;
+                const dr = rgb1.r - rgb2.r; const dg = rgb1.g - rgb2.g; const db = rgb1.b - rgb2.b;
+                return Math.sqrt(dr * dr + dg * dg + db * db).toFixed(2);
+            };
+
+            return (
+                <div className="container mx-auto p-4 md:p-8 max-w-7xl">
+                    <header className="text-center mb-10">
+                        <h1 className="text-4xl md:text-5xl font-bold text-cyan-400">Iterative Color Workflow Tool 🎨</h1>
+                        <p className="text-gray-400 mt-2">Generate, print, analyze, and refine physically-sized color charts.</p>
+                    </header>
+                    <main className="space-y-12">
+                        <section className="bg-gray-800 p-6 rounded-lg shadow-lg">
+                            <h2 className="text-2xl font-semibold mb-4 border-b-2 border-cyan-500 pb-2">Select Chart Type</h2>
+                            <div className="flex items-center justify-center space-x-4 md:space-x-8">
+                                <button onClick={() => handleTargetChange('Classic')} className={`py-2 px-4 rounded-lg font-semibold transition-colors ${targetType === 'Classic' ? 'bg-cyan-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>Color Version 1</button>
+                                <button onClick={() => handleTargetChange('Passport')} className={`py-2 px-4 rounded-lg font-semibold transition-colors ${targetType === 'Passport' ? 'bg-cyan-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>Color Version 2</button>
+                            </div>
+                        </section>
+                        <hr className="border-gray-700"/>
+                        <section className="bg-gray-800 p-6 rounded-lg shadow-lg">
+                            <h2 className="text-2xl font-semibold mb-4 border-b-2 border-cyan-500 pb-2">Step 1: Generate & Print Chart</h2>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <div className="md:col-span-2">
+                                    <canvas ref={canvasRef} className="w-full h-auto rounded-md bg-gray-700 border-2 border-gray-600"></canvas>
+                                </div>
+                                <div className="flex flex-col space-y-4 justify-center">
+                                    <p className="text-gray-300">This is a {DPI} DPI, physically-sized digital replica. Print this chart, then capture the <strong>24-patch section</strong> for analysis.</p>
+                                    <button onClick={handleSaveChart} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-colors">Save Chart as PNG</button>
+                                    <button onClick={handlePrintChart} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition-colors">Print Current Chart</button>
+                                </div>
+                            </div>
+                        </section>
+                        <hr className="border-gray-700"/>
+                        <section className="bg-gray-800 p-6 rounded-lg shadow-lg">
+                            <h2 className="text-2xl font-semibold mb-4 border-b-2 border-cyan-500 pb-2">Step 2: Upload & Analyze Print</h2>
+                            <p className="text-sm text-gray-400 mb-4">Important: For analysis, please upload a clear, head-on image of only the <strong>24-patch color grid</strong> portion of your printout.</p>
+                            <div className="flex flex-col md:flex-row items-center gap-4">
+                                <div className="w-full">
+                                    <label htmlFor="file-upload" className="block text-sm font-medium text-gray-300 mb-2">Upload scan(s) or photo(s) of the 24-patch grid:</label>
+                                    <input id="file-upload" type="file" accept="image/*" multiple onChange={handleFileChange} className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-violet-600 file:text-white hover:file:bg-violet-700" />
+                                    {uploadedFiles.length > 0 && <p className="text-sm mt-2 text-green-400">{uploadedFiles.length} file(s) selected.</p>}
+                                </div>
+                                <button onClick={handleAnalyze} disabled={isLoading || uploadedFiles.length === 0} className="w-full md:w-auto mt-4 md:mt-0 bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-3 px-6 rounded-lg transition-colors disabled:bg-gray-600 disabled:cursor-not-allowed flex items-center justify-center whitespace-nowrap">
+                                    {isLoading ? (<><svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Analyzing...</>) : 'Analyze Print(s)'}
+                                </button>
+                            </div>
+                             {error && <p className="text-red-400 mt-4">{error}</p>}
+                        </section>
+                        <hr className="border-gray-700"/>
+                        {analysisResults.length > 0 && (
+                            <section className="bg-gray-800 p-6 rounded-lg shadow-lg">
+                                <h2 className="text-2xl font-semibold mb-4 border-b-2 border-cyan-500 pb-2">Step 3: Review Analysis & Refine</h2>
+                                <div className="overflow-x-auto">
+                                    <table className="min-w-full divide-y divide-gray-700">
+                                        <thead className="bg-gray-700"><tr>
+                                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Patch Name</th>
+                                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Original</th>
+                                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Captured (Avg)</th>
+                                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Difference (ΔE)</th>
+                                        </tr></thead>
+                                        <tbody className="bg-gray-800 divide-y divide-gray-700">
+                                            {analysisResults.map((result, index) => (
+                                                <tr key={index}><td className="px-4 py-4 whitespace-nowrap text-sm font-medium">{result.name}</td>
+                                                    <td className="px-4 py-4 whitespace-nowrap text-sm"><div className="flex items-center">
+                                                        <div className="w-8 h-8 rounded" style={{ backgroundColor: `rgb(${result.rgb.r}, ${result.rgb.g}, ${result.rgb.b})` }}></div>
+                                                        <div className="ml-4 font-mono">{`R:${result.rgb.r} G:${result.rgb.g} B:${result.rgb.b}`}</div>
+                                                    </div></td>
+                                                    <td className="px-4 py-4 whitespace-nowrap text-sm"><div className="flex items-center">
+                                                        <div className="w-8 h-8 rounded" style={{ backgroundColor: `rgb(${result.capturedRgb.r}, ${result.capturedRgb.g}, ${result.capturedRgb.b})` }}></div>
+                                                        <div className="ml-4 font-mono">{`R:${result.capturedRgb.r} G:${result.capturedRgb.g} B:${result.capturedRgb.b}`}</div>
+                                                    </div></td>
+                                                    <td className="px-4 py-4 whitespace-nowrap text-sm font-mono">{getColorDifference(result.rgb, result.capturedRgb)}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div className="mt-6 text-center">
+                                    <button onClick={handleGenerateAdjustedChart} className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-6 rounded-lg transition-colors">Generate Adjusted Chart</button>
+                                    <p className="text-gray-400 mt-3 text-sm">This creates a new chart with colors adjusted to counteract the printer's drift. Print the new chart and repeat the analysis for further refinement.</p>
+                                </div>
+                            </section>
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<App />);
+    </script>
+</body>
+</html>
