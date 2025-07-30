@@ -35,6 +35,11 @@ Ultimately, while the application functions as designed, the project is marked a
 
 ---
 
+![First color chart version](./colorversion1.png)
+![Second color chart version](./colorversion2.png)
+
+---
+
 ## Technologies Used
 
 * **React**
